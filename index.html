@@ -900,9 +900,14 @@ function toast(msg,type="info"){
   setTimeout(()=>t.className="",3800);
 }
 
-/* ── SUBMIT ── */
+/* ══════════════════════════════════════════════
+   SUBMIT — uses fetch with no-cors + GAS redirect
+   GAS Web Apps redirect POST → fetch follows it
+   Data sent as URL-encoded string in the body
+   which GAS reads via e.parameter
+   ══════════════════════════════════════════════ */
 async function submitAudit(){
-  /* validation */
+  // ── Validation ──
   const req=[
     ["auditorName","Auditor Name"],["jcName","Jio Center"],
     ["jpId","JP ID"],["jpName","JP Name"],
@@ -912,8 +917,10 @@ async function submitAudit(){
     const el=document.getElementById(id);
     if(!el.value.trim()){
       toast("⚠ "+lbl+" is required","err");
-      el.focus();el.style.borderColor="var(--red)";
-      setTimeout(()=>el.style.borderColor="",2500);return;
+      el.focus();
+      el.style.borderColor="var(--red)";
+      setTimeout(()=>el.style.borderColor="",2500);
+      return;
     }
   }
   const rated=Object.values(ST).filter(v=>v.status!==null).length;
@@ -922,11 +929,11 @@ async function submitAudit(){
   }
 
   const btn=document.getElementById("submitBtn");
-  btn.disabled=true;btn.textContent="⏳  Submitting…";
+  btn.disabled=true;
+  btn.textContent="⏳  Submitting…";
 
-  /* build payload */
+  // ── Build score ──
   const okCount  = Object.values(ST).filter(v=>v.status==="OK").length;
-  const gapCount = Object.values(ST).filter(v=>v.status==="GAP").length;
   const naCount  = Object.values(ST).filter(v=>v.status==="NA").length;
   const scoreable= rated-naCount;
   const pct      = scoreable>0?Math.round((okCount/scoreable)*100):0;
@@ -936,6 +943,7 @@ async function submitAudit(){
 
   const ts=new Date().toLocaleString("en-IN",{timeZone:"Asia/Kolkata"});
 
+  // ── Build payload object (no photos — kept separate to avoid size limits) ──
   const payload={
     timestamp:ts,
     auditorName:document.getElementById("auditorName").value.trim(),
@@ -944,112 +952,65 @@ async function submitAudit(){
     jpName:document.getElementById("jpName").value.trim(),
     jpamName:document.getElementById("jpamName").value.trim(),
     visitDate:document.getElementById("visitDate").value,
-    gpsLat:gpsData.lat,
-    gpsLng:gpsData.lng,
-    gpsAccuracy:gpsData.accuracy,
+    gpsLat:gpsData.lat||"",
+    gpsLng:gpsData.lng||"",
+    gpsAccuracy:gpsData.accuracy||"",
     mapsLink:document.getElementById("mapsLink").value.trim(),
     manualAddress:document.getElementById("manualAddr").value.trim(),
-    photoCount:photos.length,
-    photos:photos.map((p,i)=>({index:i+1,name:p.name,base64:p.base64})),
+    photoCount:String(photos.length),
+    photos:JSON.stringify(photos.map((p,i)=>({index:i+1,name:p.name,base64:p.base64}))),
     overallScore:okCount+"/"+(scoreable||22),
     pctCompliance:pct+"%",
     grade:grade,
     overallRemarks:document.getElementById("overallRemarks").value.trim()
   };
-
   PARAMS.forEach(p=>{
     const s=ST[p.id];
     payload["p"+p.id+"_name"]    =p.name;
     payload["p"+p.id+"_status"]  =s.status||"NR";
-    payload["p"+p.id+"_obs"]     =s.obs;
-    payload["p"+p.id+"_gap"]     =s.gap;
-    payload["p"+p.id+"_resp"]    =s.resp;
-    payload["p"+p.id+"_timeline"]=s.timeline;
+    payload["p"+p.id+"_obs"]     =s.obs||"";
+    payload["p"+p.id+"_gap"]     =s.gap||"";
+    payload["p"+p.id+"_resp"]    =s.resp||"";
+    payload["p"+p.id+"_timeline"]=s.timeline||"";
   });
 
-  /* DEMO mode */
-  if(SCRIPT_URL==="https://script.google.com/macros/s/AKfycbyQSk--xhTNjKlw4YiILGLvsXCyyo_gTpXByTUGvQ2s1J90BqBXQXtkOsz8WQSGTgKD/exec"){
-    console.log("DEMO PAYLOAD:",payload);
-    toast("✅ Demo mode — payload logged to console","ok");
+  // ── DEMO mode ──
+  if(SCRIPT_URL==="https://script.google.com/macros/s/AKfycbwAd2Ocuql_BUVBHXDGHRjwMuXIQXtIZVyIk8djNsEWGB7H68fbEH2OHfSBMU5_sJjX/exec"){
+    console.log("📋 DEMO PAYLOAD:",payload);
+    toast("ℹ️ Demo mode — set SCRIPT_URL to go live","info");
     btn.textContent="✅  Submit Hygiene Check to Google Sheets";
-    btn.disabled=false;return;
+    btn.disabled=false;
+    return;
   }
 
-  /* ── RELIABLE SUBMIT via hidden form POST (avoids no-cors JSON block) ── */
-  submitViaForm(payload, btn);
-}
+  // ── SEND via fetch (no-cors) with URL-encoded body ──
+  // GAS reads this via e.parameter — most reliable cross-origin method
+  try{
+    // Encode as URL params — GAS e.parameter reads these natively
+    const body = Object.entries(payload)
+      .map(([k,v])=>encodeURIComponent(k)+"="+encodeURIComponent(v==null?"":v))
+      .join("&");
 
-function submitViaForm(payload, btn) {
-  try {
-    // Remove photos from payload for form submission (too large for URL encoding)
-    // Photos are stored as base64 strings - send count and names only
-    const lightPayload = Object.assign({}, payload);
-    lightPayload.photos = payload.photos.map(p => p.name).join("|");
-    // Store full photo data separately for potential future Drive upload
-    lightPayload.photoData = JSON.stringify(payload.photos.map(p => ({name:p.name, base64:p.base64})));
-
-    // Create a hidden iframe to catch the response (prevents page redirect)
-    let iframe = document.getElementById("_submit_iframe");
-    if (!iframe) {
-      iframe = document.createElement("iframe");
-      iframe.name = "_submit_iframe";
-      iframe.id   = "_submit_iframe";
-      iframe.style.cssText = "display:none;width:0;height:0;border:none;position:absolute;left:-9999px";
-      document.body.appendChild(iframe);
-    }
-
-    // Create hidden form targeting the iframe
-    const form = document.createElement("form");
-    form.method  = "POST";
-    form.action  = SCRIPT_URL;
-    form.target  = "_submit_iframe";
-    form.style.display = "none";
-
-    // Add all payload fields as hidden inputs
-    Object.entries(lightPayload).forEach(([key, val]) => {
-      const input = document.createElement("input");
-      input.type  = "hidden";
-      input.name  = key;
-      input.value = (val === null || val === undefined) ? "" : String(val);
-      form.appendChild(input);
+    await fetch(SCRIPT_URL, {
+      method:"POST",
+      mode:"no-cors",                              // required for GAS cross-origin
+      headers:{"Content-Type":"application/x-www-form-urlencoded"},
+      body: body
     });
 
-    document.body.appendChild(form);
+    // no-cors means we can't read the response — but if fetch resolves = request sent
+    toast("✅ Audit submitted to Google Sheets!","ok");
+    btn.textContent="✅  SUBMITTED";
+    setTimeout(()=>{
+      btn.textContent="✅  Submit Hygiene Check to Google Sheets";
+      btn.disabled=false;
+    },5000);
 
-    // Listen for iframe load = success signal
-    let submitted = false;
-    iframe.onload = function() {
-      if (!submitted) return;
-      toast("✅ Audit submitted to Google Sheets!", "ok");
-      btn.textContent = "✅  SUBMITTED — Thank you";
-      setTimeout(() => {
-        btn.textContent = "✅  Submit Hygiene Check to Google Sheets";
-        btn.disabled = false;
-      }, 5000);
-      document.body.removeChild(form);
-    };
-
-    form.submit();
-    submitted = true;
-
-    // Fallback success message after 4s (iframe.onload can be unreliable on some mobile browsers)
-    setTimeout(() => {
-      if (btn.disabled) {
-        toast("✅ Audit submitted to Google Sheets!", "ok");
-        btn.textContent = "✅  SUBMITTED — Thank you";
-        setTimeout(() => {
-          btn.textContent = "✅  Submit Hygiene Check to Google Sheets";
-          btn.disabled = false;
-        }, 4000);
-      }
-      if (document.body.contains(form)) document.body.removeChild(form);
-    }, 4500);
-
-  } catch(e) {
-    console.error("Submit error:", e);
-    toast("❌ Submission error — see console", "err");
-    btn.textContent = "✅  Submit Hygiene Check to Google Sheets";
-    btn.disabled = false;
+  }catch(err){
+    console.error("Fetch error:",err);
+    toast("❌ Network error — check internet connection","err");
+    btn.textContent="✅  Submit Hygiene Check to Google Sheets";
+    btn.disabled=false;
   }
 }
 </script>
