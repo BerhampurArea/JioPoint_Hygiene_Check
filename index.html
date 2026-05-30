@@ -968,30 +968,88 @@ async function submitAudit(){
   });
 
   /* DEMO mode */
-  if(SCRIPT_URL==="YOUR_GOOGLE_APPS_SCRIPT_URL"){
+  if(SCRIPT_URL==="https://script.google.com/macros/s/AKfycbyQSk--xhTNjKlw4YiILGLvsXCyyo_gTpXByTUGvQ2s1J90BqBXQXtkOsz8WQSGTgKD/exec"){
     console.log("DEMO PAYLOAD:",payload);
     toast("✅ Demo mode — payload logged to console","ok");
     btn.textContent="✅  Submit Hygiene Check to Google Sheets";
     btn.disabled=false;return;
   }
 
-  try{
-    await fetch(SCRIPT_URL,{
-      method:"POST",mode:"no-cors",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify(payload)
+  /* ── RELIABLE SUBMIT via hidden form POST (avoids no-cors JSON block) ── */
+  submitViaForm(payload, btn);
+}
+
+function submitViaForm(payload, btn) {
+  try {
+    // Remove photos from payload for form submission (too large for URL encoding)
+    // Photos are stored as base64 strings - send count and names only
+    const lightPayload = Object.assign({}, payload);
+    lightPayload.photos = payload.photos.map(p => p.name).join("|");
+    // Store full photo data separately for potential future Drive upload
+    lightPayload.photoData = JSON.stringify(payload.photos.map(p => ({name:p.name, base64:p.base64})));
+
+    // Create a hidden iframe to catch the response (prevents page redirect)
+    let iframe = document.getElementById("_submit_iframe");
+    if (!iframe) {
+      iframe = document.createElement("iframe");
+      iframe.name = "_submit_iframe";
+      iframe.id   = "_submit_iframe";
+      iframe.style.cssText = "display:none;width:0;height:0;border:none;position:absolute;left:-9999px";
+      document.body.appendChild(iframe);
+    }
+
+    // Create hidden form targeting the iframe
+    const form = document.createElement("form");
+    form.method  = "POST";
+    form.action  = SCRIPT_URL;
+    form.target  = "_submit_iframe";
+    form.style.display = "none";
+
+    // Add all payload fields as hidden inputs
+    Object.entries(lightPayload).forEach(([key, val]) => {
+      const input = document.createElement("input");
+      input.type  = "hidden";
+      input.name  = key;
+      input.value = (val === null || val === undefined) ? "" : String(val);
+      form.appendChild(input);
     });
-    toast("✅ Hygiene Check submitted successfully!","ok");
-    btn.textContent="✅  SUBMITTED — Thank you";
-    setTimeout(()=>{
-      btn.textContent="✅  Submit Hygiene Check to Google Sheets";
-      btn.disabled=false;
-    },5000);
-  }catch(e){
-    console.error(e);
-    toast("❌ Submission failed — check console","err");
-    btn.textContent="✅  Submit Hygiene Check to Google Sheets";
-    btn.disabled=false;
+
+    document.body.appendChild(form);
+
+    // Listen for iframe load = success signal
+    let submitted = false;
+    iframe.onload = function() {
+      if (!submitted) return;
+      toast("✅ Audit submitted to Google Sheets!", "ok");
+      btn.textContent = "✅  SUBMITTED — Thank you";
+      setTimeout(() => {
+        btn.textContent = "✅  Submit Hygiene Check to Google Sheets";
+        btn.disabled = false;
+      }, 5000);
+      document.body.removeChild(form);
+    };
+
+    form.submit();
+    submitted = true;
+
+    // Fallback success message after 4s (iframe.onload can be unreliable on some mobile browsers)
+    setTimeout(() => {
+      if (btn.disabled) {
+        toast("✅ Audit submitted to Google Sheets!", "ok");
+        btn.textContent = "✅  SUBMITTED — Thank you";
+        setTimeout(() => {
+          btn.textContent = "✅  Submit Hygiene Check to Google Sheets";
+          btn.disabled = false;
+        }, 4000);
+      }
+      if (document.body.contains(form)) document.body.removeChild(form);
+    }, 4500);
+
+  } catch(e) {
+    console.error("Submit error:", e);
+    toast("❌ Submission error — see console", "err");
+    btn.textContent = "✅  Submit Hygiene Check to Google Sheets";
+    btn.disabled = false;
   }
 }
 </script>
